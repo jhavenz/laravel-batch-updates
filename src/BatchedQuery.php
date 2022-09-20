@@ -31,32 +31,25 @@ class BatchedQuery
     /**
      * Can be used to increment/decrement values too,
      * using the math operators {@see incrementOperators}
-     *
-     * Note: <adCount> and <adRevenue> are made up attributes
-     *
-     * $values = [
+     * $sampleValues = [
      *     [
-     *        'eventid' => 123456,
-     *        'sliverid' => 654321,
-     *        'approxoutminutes' => ['+', 30]
+     *        'user_id' => 123456,
+     *        'post_id' => 654321,
+     *        'approx_read_time' => ['+', 30]
      *     ],
-     *     // or
      *     [
-     *        'eventid' => '123456',
-     *        'sliverid' => 654321,
-     *        'approxoutminutes' => ['*', 2]
+     *        'user_id' => '123456',
+     *        'post_id' => 654321,
+     *        'approx_read_time' => ['*', 2]
      *     ],
      * ];
      *
-     * @param  iterable  $values
-     * @param  string|null  $index
-     * @param  bool  $quoted
-     * @return bool|int
+     * Each row gets updated with it's own value(s)
      */
     public function update(iterable $values, string $index = null, bool $quoted = false): bool|int
     {
         $queryFields = [];
-        $ids = [];
+        $keys = [];
 
         if (blank($values)) {
             return false;
@@ -65,7 +58,7 @@ class BatchedQuery
         $index = $index ?: $this->model->getKeyName();
 
         foreach ($values as $val) {
-            $ids[] = $val[$index];
+            $keys[] = $val[$index];
 
             if ($this->model->usesTimestamps()) {
                 $updatedAtColumn = $this->model->getUpdatedAtColumn();
@@ -104,7 +97,7 @@ class BatchedQuery
             $this->buildQueryResult(
                 substr($this->buildCaseClause($queryFields), 0, -2),
                 $index,
-                implode("','", $ids)
+                implode("','", $keys)
             )
         );
     }
