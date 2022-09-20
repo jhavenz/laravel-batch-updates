@@ -4,7 +4,6 @@ namespace Jhavenz\LaravelBatchUpdate;
 
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Support\Carbon;
-use Webmozart\Assert\Assert;
 
 class BatchedQuery
 {
@@ -18,7 +17,9 @@ class BatchedQuery
 
     public function __construct(Model|string $model)
     {
-        Assert::isAOf($model, Model::class);
+        if (! is_a($model, Model::class)) {
+            throw new \TypeError('Expected class as a string. Got: '.get_debug_type($model));
+        }
 
         $this->model = is_string($model) ? \app($model) : $model;
 
