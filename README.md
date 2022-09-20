@@ -2,9 +2,8 @@
 There's always been a missing bit when you want don't want to 'upsert', which Laravel covers, 
 and you don't want to 'insert'. When you just need to 'update' all the rows, each having their
 own varying data set, then this package will help you out.
-```
-## Installation
 
+## Installation
 You can install the package via composer:
 
 ```bash
@@ -12,13 +11,13 @@ composer require jhavenz/laravel-batch-update
 ```
 
 ## Usage
-
-### Batch updates for Eloquent models
-Note: This package has been used a bit in my projects and is working nicely so far, but it's still in an infant
+Notes: 
+- This package has been used a bit in my projects and is working nicely so far, but it's still in an infant
 and I have to write the test suite. Please lmk if you see an issue or have an idea to add.
-I'm aware that I'm bypassing the bindings as I'm building the query, but since I'm generally using this
+- I'm aware that I'm bypassing the bindings as I'm building the query, but since I'm generally using this
 logic when I wan to map 100s of rows, then fire the query off, I've hit limitations against the database
 where there's 'too many bindings' for the db engine to handle.
+ 
 Thoughts?..
 It's better like this, right?
 _Unless, of course, you're passing user input to your db... in that case, I can't imagine you'd be batch
