@@ -1,0 +1,59 @@
+{
+    "name": "jhavenz/laravel-batch-update",
+    "description": "batch updates for Eloquent models",
+    "keywords": [
+        "jhavenz",
+        "laravel-batch-update"
+    ],
+    "homepage": "https://github.com/jhavenz/laravel-batch-update",
+    "license": "MIT",
+    "authors": [
+        {
+            "name": "Jonathan Havens",
+            "email": "mail@jhavens.tech",
+            "role": "Developer"
+        }
+    ],
+    "require": {
+        "php": "^8.0",
+        "illuminate/database": "^9.0",
+        "webmozart/assert": "^1.11.0"
+    },
+    "require-dev": {
+        "friendsofphp/php-cs-fixer": "^3.0",
+        "jhavenz/jh-laravel-helpers": "*",
+        "orchestra/testbench": "*",
+        "pestphp/pest": "^1.20",
+        "spatie/ray": "^1.28"
+    },
+    "autoload": {
+        "psr-4": {
+            "Jhavenz\\LaravelBatchUpdate\\": "src"
+        }
+    },
+    "autoload-dev": {
+        "psr-4": {
+            "Jhavenz\\LaravelBatchUpdate\\Tests\\": "tests"
+        }
+    },
+    "scripts": {
+        "test": "vendor/bin/pest",
+        "test-coverage": "vendor/bin/pest --coverage",
+        "format": "vendor/bin/php-cs-fixer fix --allow-risky=yes"
+    },
+    "extra": {
+        "laravel": {
+            "providers": [
+                "Jhavenz\\LaravelBatchUpdate\\LaravelBatchUpdatesServiceProvider"
+            ]
+        }
+    },
+    "config": {
+        "sort-packages": true,
+        "allow-plugins": {
+            "pestphp/pest-plugin": true
+        }
+    },
+    "minimum-stability": "dev",
+    "prefer-stable": true
+}
