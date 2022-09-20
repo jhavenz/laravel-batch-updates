@@ -33,7 +33,7 @@ class SqlGrammarUtils
             return self::safeJson($value);
         }
 
-        if (!empty($value) && is_string($value)) {
+        if (! empty($value) && is_string($value)) {
             return str_replace(
                 ['\\', "\0", "\n", "\r", "'", '"', "\x1a"],
                 ['\\\\', '\\0', '\\n', '\\r', "\\'", '\\"', '\\Z'],
@@ -50,7 +50,7 @@ class SqlGrammarUtils
      */
     protected static function isJson($str): bool
     {
-        if (!is_string($str) || is_numeric($str)) {
+        if (! is_string($str) || is_numeric($str)) {
             return false;
         }
 
