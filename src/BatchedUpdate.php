@@ -2,12 +2,24 @@
 
 namespace Jhavenz\LaravelBatchUpdate;
 
+use Illuminate\Database\Eloquent\Collection as EloquentCollection;
 use Illuminate\Database\Eloquent\Model;
+use Illuminate\Database\Query\Grammars\Grammar;
 use Illuminate\Support\Carbon;
+use InvalidArgumentException;
+use Webmozart\Assert\Assert;
 
-class BatchedQuery
+class BatchedUpdate
 {
+    private string $compiledQuery;
+
+    private Grammar $grammer;
+
     private Model $model;
+
+    private array $switchCases = [];
+
+    private array $modelIds;
 
     private bool $backticksDisabled;
 
@@ -17,9 +29,7 @@ class BatchedQuery
 
     public function __construct(Model|string $model)
     {
-        if (! is_a($model, Model::class)) {
-            throw new \TypeError('Expected class as a string. Got: '.get_debug_type($model));
-        }
+        Assert::isAOf($model, Model::class);
 
         $this->model = is_string($model) ? \app($model) : $model;
 
@@ -28,37 +38,35 @@ class BatchedQuery
         );
     }
 
-    /**
-     * Can be used to increment/decrement values too,
-     * using the math operators {@see incrementOperators}
-     * $sampleValues = [
-     *     [
-     *        'user_id' => 123456,
-     *        'post_id' => 654321,
-     *        'approx_read_time' => ['+', 30]
-     *     ],
-     *     [
-     *        'user_id' => '123456',
-     *        'post_id' => 654321,
-     *        'approx_read_time' => ['*', 2]
-     *     ],
-     * ];
-     *
-     * Each row gets updated with it's own value(s)
-     */
-    public function update(iterable $values, string $index = null, bool $quoted = false): bool|int
+    public static function createFromModel(Model|EloquentCollection|string $model): static
     {
-        $queryFields = [];
-        $keys = [];
+        if ($model instanceof EloquentCollection) {
+            $models = $model->keyBy(static fn ($model) => match (true) {
+                is_object($model) => $model::class,
+                is_string($model) && is_a($model, Model::class, true) => $model,
+                default => throw new InvalidArgumentException(
+                    'Eloquent collection can only contain class strings or Model instances'
+                ),
+            });
 
-        if (blank($values)) {
-            return false;
+            if ($models->keys()->count() > 1) {
+                throw new InvalidArgumentException('Eloquent collection can only contain one type of model');
+            }
+
+            $model = $models->first();
         }
+
+        return new static($model);
+    }
+
+    public function compileUpdateQuery(iterable $values, string $index = null, bool $raw = false): static
+    {
+        Assert::notEmpty(collect($values));
 
         $index = $index ?: $this->model->getKeyName();
 
         foreach ($values as $val) {
-            $keys[] = $val[$index];
+            $this->modelIds[] = $val[$index];
 
             if ($this->model->usesTimestamps()) {
                 $updatedAtColumn = $this->model->getUpdatedAtColumn();
@@ -81,31 +89,75 @@ class BatchedQuery
                         VALUE;
                     } else {
                         // We're updating
-                        $finalField = $quoted
+                        $finalField = $raw
                             ? SqlGrammarUtils::escape($val[$field])
                             : "'".SqlGrammarUtils::escape($val[$field])."'";
 
                         $value = (is_null($val[$field]) ? 'NULL' : $finalField);
                     }
 
-                    $queryFields[$field][] = $this->buildWhenThenClause($index, $val[$index], $value);
+                    $this->switchCases[$field][] = $this->buildWhenThenClause($index, $val[$index], $value);
                 }
             }
         }
 
-        return $this->model->getConnection()->update(
-            $this->buildQueryResult(
-                substr($this->buildCaseClause($queryFields), 0, -2),
-                $index,
-                implode("','", $keys)
-            )
+        $this->compiledQuery = $this->buildQueryResult(
+            substr($this->buildCaseStatement(), 0, -2),
+            $index,
+            implode("','", $this->modelIds)
         );
+
+        return $this;
+    }
+
+    /**
+     * Can be used to increment/decrement values too,
+     * using the math operators {@see incrementOperators}
+     *
+     * Note: <adCount> and <adRevenue> are made up attributes
+     *
+     * $values = [
+     *     [
+     *        'eventid' => 123456,
+     *        'sliverid' => 654321,
+     *        'approxoutminutes' => ['+', 30]
+     *     ],
+     *     // or
+     *     [
+     *        'eventid' => '123456',
+     *        'sliverid' => 654321,
+     *        'approxoutminutes' => ['*', 2]
+     *     ],
+     * ];
+     *
+     * @param  iterable  $values
+     * @param  string|null  $index
+     * @param  bool  $raw
+     * @return bool|int
+     */
+    public function update(iterable $values, string $index = null, bool $raw = false): bool|int
+    {
+        if (blank($values)) {
+            return false;
+        }
+
+        $this->compileUpdateQuery(...func_get_args());
+
+        return $this->model->getConnection()->update($this->compiledQuery);
     }
 
     /**
      * @return string
      */
-    private function getFullTableName(): string
+    public function getCompiledQuery(): string
+    {
+        return $this->compiledQuery;
+    }
+
+    /**
+     * @return string
+     */
+    private function getQualifiedTableName(): string
     {
         return $this->model->getConnection()->getTablePrefix().$this->model->getTable();
     }
@@ -144,23 +196,22 @@ class BatchedQuery
     }
 
     /**
-     * @param  array{column_name: string, sql_statements: array}  $queryFields
      * @return string
      */
-    private function buildCaseClause(array $queryFields): string
+    private function buildCaseStatement(): string
     {
-        return collect($queryFields)
-            ->reduce(function (string $sql, array $sqlStatements, string $field) {
-                $values = implode(PHP_EOL, $sqlStatements);
-                $wrappedField = $this->applyWrapping($field);
+        return collect($this->switchCases)->reduce(function (string $sql, array $sqlStatements, string $field) {
+            $values = implode(PHP_EOL, $sqlStatements);
+            $wrappedField = $this->applyWrapping($field);
 
-                $sql .= <<<CASE_CLAUSE
-                    {$wrappedField} = (CASE {$values} \n
-                    ELSE {$wrappedField}\n END) \n,
-                    CASE_CLAUSE;
+            $sql .= <<<CASE_CLAUSE
+            {$wrappedField} = (CASE
+            {$values}
+            ELSE {$wrappedField} END) \n,
+            CASE_CLAUSE;
 
-                return $sql;
-            }, '');
+            return $sql;
+        }, '');
     }
 
     /**
@@ -200,7 +251,7 @@ class BatchedQuery
     private function buildQueryResult(string $case, mixed $index, string $idValues): string
     {
         return <<<UPDATE_TABLE_CLAUSE
-        UPDATE "{$this->getFullTableName()}" SET $case WHERE "{$index}" IN('$idValues');
+        UPDATE "{$this->getQualifiedTableName()}" SET $case WHERE "{$index}" IN('$idValues');
         UPDATE_TABLE_CLAUSE;
     }
 }

@@ -3,6 +3,9 @@ There's always been a missing bit when you want don't want to 'upsert', which La
 and you don't want to 'insert'. When you just need to 'update' all the rows, each having their
 own varying data set, then this package will help you out.
 
+## Requirements
+    - PHP: >= 8.1
+
 ## Installation
 You can install the package via composer:
 
@@ -28,11 +31,12 @@ updating while the user is waiting anyway._
 Update multiple rows, each having their own values..and you only want to update:
 (not updateOrCreate, upsert, findOrCreate, etc.)
 e.g.
+
 ```php
-use Jhavenz\LaravelBatchUpdate\BatchedQuery;
+use Jhavenz\LaravelBatchUpdate\BatchedUpdate;
 
 // 
-(new BatchedQuery(User::class))->update(
+(new BatchedUpdate(User::class))->update(
     values: [
         [
             'user_id' => 123,

@@ -62,7 +62,7 @@ class SqlGrammarUtils
     /**
      * @param  string  $jsonData
      * @param  bool  $asArray
-     * @return array|false|mixed|string
+     * @return array|false|string
      */
     protected static function safeJson(string $jsonData, bool $asArray = false)
     {
@@ -90,7 +90,7 @@ class SqlGrammarUtils
 
     /**
      * @param $value
-     * @return array|string|string[]
+     * @return string|string[]
      */
     protected static function safeJsonString($value)
     {
