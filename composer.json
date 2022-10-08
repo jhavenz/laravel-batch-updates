@@ -16,6 +16,7 @@
     ],
     "require": {
         "php": "^8.0",
+        "doctrine/dbal": "^3.4.5",
         "illuminate/database": "^9.0"
     },
     "require-dev": {

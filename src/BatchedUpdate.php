@@ -4,24 +4,21 @@ namespace Jhavenz\LaravelBatchUpdate;
 
 use Illuminate\Database\Eloquent\Collection as EloquentCollection;
 use Illuminate\Database\Eloquent\Model;
-use Illuminate\Database\Query\Grammars\Grammar;
 use Illuminate\Support\Carbon;
 use InvalidArgumentException;
 use Webmozart\Assert\Assert;
 
 class BatchedUpdate
 {
-    private string $compiledQuery;
-
-    private Grammar $grammer;
-
     private Model $model;
-
-    private array $switchCases = [];
 
     private array $modelIds;
 
+    private string $compiledQuery;
+
     private bool $backticksDisabled;
+
+    private array $switchCases = [];
 
     private array $incrementOperators = [
         '+', '-', '*', '/', '%',
@@ -59,51 +56,65 @@ class BatchedUpdate
         return new static($model);
     }
 
-    public function compileUpdateQuery(iterable $values, string $index = null, bool $raw = false): static
-    {
+    protected function compileUpdateQuery(
+        iterable $values,
+        string $primaryKeyColumn = null,
+        bool $raw = false,
+        bool $failOnNonExistingColumns = false
+    ): static {
         Assert::notEmpty(collect($values));
 
-        $index = $index ?: $this->model->getKeyName();
+        $primaryKeyColumn = $primaryKeyColumn ?: $this->model->getKeyName();
 
-        foreach ($values as $val) {
-            $this->modelIds[] = $val[$index];
+        foreach ($values as $modelAttributes) {
+            if ($modelAttributes instanceof Model) {
+                $modelAttributes = $modelAttributes->toArray();
+            }
+
+            $this->modelIds[] = $modelAttributes[$primaryKeyColumn];
 
             if ($this->model->usesTimestamps()) {
                 $updatedAtColumn = $this->model->getUpdatedAtColumn();
 
-                if (! isset($val[$updatedAtColumn])) {
-                    $val[$updatedAtColumn] = Carbon::now()->format($this->model->getDateFormat());
+                if (! isset($modelAttributes[$updatedAtColumn])) {
+                    $modelAttributes[$updatedAtColumn] = Carbon::now()->format($this->model->getDateFormat());
                 }
             }
 
-            foreach (array_keys($val) as $field) {
-                if ($field !== $index) {
-                    if (gettype($val[$field]) == 'array') {
+            $table = $this->model->getTable();
+
+            foreach (array_keys($modelAttributes) as $databaseColumn) {
+                if ($failOnNonExistingColumns) {
+                    $this->model->getConnection()->getDoctrineColumn($table, $databaseColumn);
+                }
+
+                if ($databaseColumn !== $primaryKeyColumn) {
+                    if (gettype($modelAttributes[$databaseColumn]) == 'array') {
                         // We're Increment or Decrementing
-                        $this->guardAgainstInvalidIncrementDecrementOperation($val[$field]);
-                        $field1 = $val[$field][0];
-                        $field2 = $val[$field][1];
+                        $this->guardAgainstInvalidIncrementDecrementOperation($modelAttributes[$databaseColumn]);
+                        $field1 = $modelAttributes[$databaseColumn][0];
+                        $field2 = $modelAttributes[$databaseColumn][1];
 
                         $value = <<<VALUE
-                        `{$field}`{$field1}{$field2}
+                        `{$databaseColumn}`{$field1}{$field2}
                         VALUE;
                     } else {
                         // We're updating
                         $finalField = $raw
-                            ? SqlGrammarUtils::escape($val[$field])
-                            : "'".SqlGrammarUtils::escape($val[$field])."'";
+                            ? SqlGrammarUtils::escape($modelAttributes[$databaseColumn])
+                            : "'".SqlGrammarUtils::escape($modelAttributes[$databaseColumn])."'";
 
-                        $value = (is_null($val[$field]) ? 'NULL' : $finalField);
+                        $value = (is_null($modelAttributes[$databaseColumn]) ? 'NULL' : $finalField);
                     }
 
-                    $this->switchCases[$field][] = $this->buildWhenThenClause($index, $val[$index], $value);
+                    $this->switchCases[$databaseColumn][] = $this->buildWhenThenClause($primaryKeyColumn, $modelAttributes[$primaryKeyColumn], $value);
                 }
             }
         }
 
         $this->compiledQuery = $this->buildQueryResult(
             substr($this->buildCaseStatement(), 0, -2),
-            $index,
+            $primaryKeyColumn,
             implode("','", $this->modelIds)
         );
 
@@ -141,9 +152,9 @@ class BatchedUpdate
             return false;
         }
 
-        $this->compileUpdateQuery(...func_get_args());
-
-        return $this->model->getConnection()->update($this->compiledQuery);
+        return $this->model->getConnection()->update(
+            $this->compileUpdateQuery(...func_get_args())->getCompiledQuery()
+        );
     }
 
     /**
@@ -217,15 +228,15 @@ class BatchedUpdate
     /**
      * @param  string  $field
      * @param  mixed  $value
-     * @param  mixed  $then
+     * @param  mixed  $values
      * @return string
      */
-    private function buildWhenThenClause(string $field, mixed $value, mixed $then): string
+    private function buildWhenThenClause(string $field, mixed $value, mixed $values): string
     {
         $wrappedField = $this->applyWrapping($field);
 
         return <<<WHEN_CLAUSE
-        WHEN {$wrappedField} = '{$value}' THEN {$then}
+        WHEN {$wrappedField} = '{$value}' THEN {$values}
         WHEN_CLAUSE;
     }
 
