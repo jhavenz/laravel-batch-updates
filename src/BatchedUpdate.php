@@ -4,6 +4,7 @@ namespace Jhavenz\LaravelBatchUpdate;
 
 use Illuminate\Database\Eloquent\Collection as EloquentCollection;
 use Illuminate\Database\Eloquent\Model;
+use Illuminate\Database\SqlServerConnection;
 use Illuminate\Support\Carbon;
 use InvalidArgumentException;
 use Webmozart\Assert\Assert;
@@ -223,7 +224,7 @@ class BatchedUpdate
     {
         return collect($this->switchCases)->reduce(function (string $sql, array $sqlStatements, string $field) {
             $values = implode(PHP_EOL, $sqlStatements);
-            $wrappedField = $this->applyWrapping($field);
+            $wrappedField = $this->applyFieldWrapping($field);
 
             $sql .= <<<CASE_CLAUSE
             {$wrappedField} = (CASE
@@ -243,7 +244,7 @@ class BatchedUpdate
      */
     private function buildWhenThenClause(string $field, mixed $value, mixed $values): string
     {
-        $wrappedField = $this->applyWrapping($field);
+        $wrappedField = $this->applyFieldWrapping($field);
 
         return <<<WHEN_CLAUSE
         WHEN {$wrappedField} = '{$value}' THEN {$values}
@@ -254,13 +255,13 @@ class BatchedUpdate
      * @param  string  $field
      * @return string
      */
-    private function applyWrapping(string $field): string
+    private function applyFieldWrapping(string $field): string
     {
-        if ($this->backticksDisabled) {
-            return str($field)->wrap('"')->toString();
-        }
-
-        return str($field)->wrap('`')->toString();
+        return match (true) {
+            $this->model->getConnection() instanceof SqlServerConnection => str($field)->wrap('[', ']')->toString(),
+            $this->backticksDisabled => str($field)->wrap('"')->toString(),
+            default => str($field)->wrap('`')->toString()
+        };
     }
 
     /**
