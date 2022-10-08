@@ -10,6 +10,8 @@ use Webmozart\Assert\Assert;
 
 class BatchedUpdate
 {
+    private static array $dbColumnCache;
+
     private Model $model;
 
     private array $modelIds;
@@ -29,6 +31,12 @@ class BatchedUpdate
         Assert::isAOf($model, Model::class);
 
         $this->model = is_string($model) ? \app($model) : $model;
+
+        self::$dbColumnCache[$this->model::class] ??= $this
+            ->model
+            ->getConnection()
+            ->getSchemaBuilder()
+            ->getColumnListing($this->model->getTable());
 
         $this->backticksDisabled = SqlGrammarUtils::disableBacktick(
             config("database.connections.{$this->model->getConnectionName()}.driver")
@@ -66,7 +74,6 @@ class BatchedUpdate
 
         $table = $this->model->getTable();
         $primaryKeyColumn = $primaryKeyColumn ?: $this->model->getKeyName();
-        $existingColumns = $this->model->getConnection()->getSchemaBuilder()->getColumnListing($table);
 
         foreach ($values as $modelAttributes) {
             if ($modelAttributes instanceof Model) {
@@ -84,7 +91,7 @@ class BatchedUpdate
             }
 
             foreach (array_keys($modelAttributes) as $databaseColumn) {
-                if ($failOnNonExistingColumns && ! in_array($databaseColumn, $existingColumns)) {
+                if ($failOnNonExistingColumns && ! in_array($databaseColumn, self::$dbColumnCache[$this->model::class])) {
                     throw new InvalidArgumentException(
                         sprintf("There is no column with name [%s] on table [%s].", $databaseColumn, $table),
                         30 //=> doctrine error code for a missing db column
