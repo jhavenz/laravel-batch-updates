@@ -64,7 +64,9 @@ class BatchedUpdate
     ): static {
         Assert::notEmpty(collect($values));
 
+        $table = $this->model->getTable();
         $primaryKeyColumn = $primaryKeyColumn ?: $this->model->getKeyName();
+        $existingColumns = $this->model->getConnection()->getSchemaBuilder()->getColumnListing($table);
 
         foreach ($values as $modelAttributes) {
             if ($modelAttributes instanceof Model) {
@@ -81,11 +83,12 @@ class BatchedUpdate
                 }
             }
 
-            $table = $this->model->getTable();
-
             foreach (array_keys($modelAttributes) as $databaseColumn) {
-                if ($failOnNonExistingColumns) {
-                    $this->model->getConnection()->getDoctrineColumn($table, $databaseColumn);
+                if ($failOnNonExistingColumns && ! in_array($databaseColumn, $existingColumns)) {
+                    throw new InvalidArgumentException(
+                        sprintf("There is no column with name [%s] on table [%s].", $databaseColumn, $table),
+                        30 //=> doctrine error code for a missing db column
+                    );
                 }
 
                 if ($databaseColumn !== $primaryKeyColumn) {
