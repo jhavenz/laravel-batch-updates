@@ -31,6 +31,10 @@ it('can compile a batched update query for a model with timestamps', function ()
         ->toBe(createCompiledQueryExpectation($users));
 });
 
+// TODO
+it('can compile a batched update query for a model without timestamps');
+it('can compile a batched update query for a model with class castable attribute');
+it('can compile a batched update query for a model with native eloquent castable attribute');
 
 function createCompiledQueryExpectation(mixed $users): string
 {
