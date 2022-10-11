@@ -2,13 +2,19 @@
 
 namespace Jhavenz\LaravelBatchUpdate;
 
-use Illuminate\Database\Eloquent\Collection as EloquentCollection;
+use ArgumentCountError;
+use Illuminate\Database\Eloquent\InvalidCastException;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\SqlServerConnection;
 use Illuminate\Support\Carbon;
+use Illuminate\Support\Collection;
 use InvalidArgumentException;
+use TypeError;
 use Webmozart\Assert\Assert;
 
+/**
+ * @template T of \Illuminate\Support\Collection<\Jhavenz\LaravelBatchUpdate\BatchedUpdate>
+ */
 class BatchedUpdate
 {
     private static array $dbColumnCache;
@@ -33,7 +39,7 @@ class BatchedUpdate
 
         $this->model = is_string($model) ? \app($model) : $model;
 
-        self::$dbColumnCache[$this->model::class] ??= $this
+        self::$dbColumnCache[$this->model->getTable()] ??= $this
             ->model
             ->getConnection()
             ->getSchemaBuilder()
@@ -44,28 +50,24 @@ class BatchedUpdate
         );
     }
 
-    public static function createFromModel(Model|EloquentCollection|string $model): static
+    /** @return T */
+    public static function createFromCollection(iterable $models): Collection
     {
-        if ($model instanceof EloquentCollection) {
-            $models = $model->keyBy(static fn ($model) => match (true) {
-                is_object($model) => $model::class,
-                is_string($model) && is_a($model, Model::class, true) => $model,
-                default => throw new InvalidArgumentException(
-                    'Eloquent collection can only contain class strings or Model instances'
-                ),
-            });
+        return collect($models)
+            ->whereInstanceOf(Model::class)
+            ->whenEmpty(fn () => throw new InvalidArgumentException("No Eloquent models were provided"))
+            ->keyBy(fn (Model $model) => $model::class)
+            ->keys()
+            ->unique()
+            ->map(fn (Model $model) => static::createFromModel($model));
+    }
 
-            if ($models->keys()->count() > 1) {
-                throw new InvalidArgumentException('Eloquent collection can only contain one type of model');
-            }
-
-            $model = $models->first();
-        }
-
+    public static function createFromModel(Model|string $model): static
+    {
         return new static($model);
     }
 
-    protected function compileUpdateQuery(
+    public function compileUpdateQuery(
         iterable $values,
         string $primaryKeyColumn = null,
         bool $raw = false,
@@ -92,7 +94,7 @@ class BatchedUpdate
             }
 
             foreach (array_keys($modelAttributes) as $databaseColumn) {
-                if ($failOnNonExistingColumns && ! in_array($databaseColumn, self::$dbColumnCache[$this->model::class])) {
+                if ($failOnNonExistingColumns && ! in_array($databaseColumn, self::$dbColumnCache[$this->model->getTable()])) {
                     throw new InvalidArgumentException(
                         sprintf("There is no column with name [%s] on table [%s].", $databaseColumn, $table),
                         30 //=> doctrine error code for a missing db column
@@ -100,23 +102,35 @@ class BatchedUpdate
                 }
 
                 if ($databaseColumn !== $primaryKeyColumn) {
-                    if (gettype($modelAttributes[$databaseColumn]) == 'array') {
-                        // We're Increment or Decrementing
-                        $this->guardAgainstInvalidIncrementDecrementOperation($modelAttributes[$databaseColumn]);
-                        $field1 = $modelAttributes[$databaseColumn][0];
-                        $field2 = $modelAttributes[$databaseColumn][1];
+                    $columnValue = $modelAttributes[$databaseColumn];
 
-                        $value = <<<VALUE
-                        `{$databaseColumn}`{$field1}{$field2}
-                        VALUE;
-                    } else {
-                        // We're updating
-                        $finalField = $raw
-                            ? SqlGrammarUtils::escape($modelAttributes[$databaseColumn])
-                            : "'".SqlGrammarUtils::escape($modelAttributes[$databaseColumn])."'";
-
-                        $value = (is_null($modelAttributes[$databaseColumn]) ? 'NULL' : $finalField);
+                    if (null !== $columnValue &&
+                        false === is_scalar($columnValue) &&
+                        $this->isCastable($databaseColumn)) {
+                        throw new InvalidArgumentException(sprintf(
+                            "Castable attributes must be provided as scalar values. [%s] for [%s] is invalid",
+                            get_debug_type($columnValue),
+                            $databaseColumn
+                        ));
                     }
+
+                    if ($this->isIncrementalOperation($columnValue)) {
+                        // We're Increment or Decrementing
+                        $this->switchCases[$databaseColumn][] = $this->buildWhenThenClause(
+                            $primaryKeyColumn,
+                            $modelAttributes[$primaryKeyColumn],
+                            "`{$databaseColumn}`{$columnValue[0]}{$columnValue[1]}"
+                        );
+
+                        continue;
+                    }
+
+                    // We're updating
+                    $finalField = $raw
+                        ? SqlGrammarUtils::escape($columnValue)
+                        : "'".SqlGrammarUtils::escape($columnValue)."'";
+
+                    $value = (is_null($columnValue) ? 'NULL' : $finalField);
 
                     $this->switchCases[$databaseColumn][] = $this->buildWhenThenClause($primaryKeyColumn, $modelAttributes[$primaryKeyColumn], $value);
                 }
@@ -168,31 +182,21 @@ class BatchedUpdate
         );
     }
 
-    /**
-     * @return string
-     */
     public function getCompiledQuery(): string
     {
         return $this->compiledQuery;
     }
 
-    /**
-     * @return string
-     */
     private function getQualifiedTableName(): string
     {
         return $this->model->getConnection()->getTablePrefix().$this->model->getTable();
     }
 
-    /**
-     * @param  string[]  $operators
-     * @return void
-     */
     private function guardAgainstInvalidIncrementDecrementOperation(array $operators): void
     {
         // If array has two values
         if (! array_key_exists(0, $operators) || ! array_key_exists(1, $operators)) {
-            throw new \ArgumentCountError(
+            throw new ArgumentCountError(
                 sprintf(
                     'Increment/Decrement array requires 2 values, a math operator [%s] and a number',
                     implode(', ', $this->incrementOperators)
@@ -203,7 +207,7 @@ class BatchedUpdate
         // Check first value
         if (gettype($operators[0]) != 'string'
             || ! in_array($operators[0], $this->incrementOperators)) {
-            throw new \TypeError(
+            throw new TypeError(
                 sprintf(
                     'First value in Increment/Decrement array must be a string and a math operator [%s]',
                     implode(', ', $this->incrementOperators)
@@ -213,13 +217,10 @@ class BatchedUpdate
 
         // Check second value
         if (! is_numeric($operators[1])) {
-            throw new \TypeError('Second value in Increment/Decrement array needs to be numeric');
+            throw new TypeError('Second value in Increment/Decrement array needs to be numeric');
         }
     }
 
-    /**
-     * @return string
-     */
     private function buildCaseStatement(): string
     {
         return collect($this->switchCases)->reduce(function (string $sql, array $sqlStatements, string $field) {
@@ -229,19 +230,13 @@ class BatchedUpdate
             $sql .= <<<CASE_CLAUSE
             {$wrappedField} = (CASE
             {$values}
-            ELSE {$wrappedField} END) \n,
+            ELSE {$wrappedField} END)\n,
             CASE_CLAUSE;
 
             return $sql;
         }, '');
     }
 
-    /**
-     * @param  string  $field
-     * @param  mixed  $value
-     * @param  mixed  $values
-     * @return string
-     */
     private function buildWhenThenClause(string $field, mixed $value, mixed $values): string
     {
         $wrappedField = $this->applyFieldWrapping($field);
@@ -251,10 +246,6 @@ class BatchedUpdate
         WHEN_CLAUSE;
     }
 
-    /**
-     * @param  string  $field
-     * @return string
-     */
     private function applyFieldWrapping(string $field): string
     {
         return match (true) {
@@ -264,16 +255,43 @@ class BatchedUpdate
         };
     }
 
-    /**
-     * @param  string  $case
-     * @param  mixed  $index
-     * @param  string  $idValues
-     * @return string
-     */
     private function buildQueryResult(string $case, mixed $index, string $idValues): string
     {
         return <<<UPDATE_TABLE_CLAUSE
         UPDATE "{$this->getQualifiedTableName()}" SET $case WHERE "{$index}" IN('$idValues');
         UPDATE_TABLE_CLAUSE;
+    }
+
+    private function isCastable(int|string $column): bool
+    {
+        try {
+            return $this->model->hasGetMutator($column)
+                || $this->model->hasAttributeGetMutator($column)
+                || $this->model->isClassCastable($column)
+                || $this->model->hasCast($column, [
+                    'array',
+                    'collection',
+                    'encrypted:array',
+                    'encrypted:collection',
+                    'encrypted:json',
+                    'encrypted:object',
+                    'json',
+                    'object',
+                ]);
+        } catch (InvalidCastException) {
+            return false;
+        }
+    }
+
+    private function isIncrementalOperation(mixed $columnValue): bool
+    {
+        if (! (is_array($columnValue) && count($columnValue) === 2)) {
+            return false;
+        }
+
+        [$operator, $value] = $columnValue;
+
+        return in_array($operator, $this->incrementOperators)
+            && is_numeric($value);
     }
 }

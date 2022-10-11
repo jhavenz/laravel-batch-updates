@@ -1,7 +1,7 @@
 <?php
 
+use Illuminate\Database\Eloquent\Collection as EloquentCollection;
 use Illuminate\Database\Eloquent\Model;
-use Illuminate\Support\Collection;
 use Jhavenz\LaravelBatchUpdate\BatchedUpdate;
 use Jhavenz\LaravelBatchUpdate\Tests\Fixtures\Post;
 use Jhavenz\LaravelBatchUpdate\Tests\Fixtures\TypeCircus;
@@ -25,50 +25,63 @@ it('can create instances from factory', function () {
 
 it('can compile a batched update query for a model with timestamps', function () {
     $users = User::factory()->count(5)->create();
+    $batchedUpdate = BatchedUpdate::createFromModel(User::class);
 
-    $data = Collection::times($users->count(), function ($i) use ($users) {
-        return [
-            'id' => $users[$i - 1]->id,
-            'name' => fake()->name(),
-            'email' => fake()->email(),
-        ];
-    });
-
-    $userIds = $users->pluck('id')->join(',');
-
-    $batchUpdate = BatchedUpdate::createFromModel($users)->compileUpdateQuery($data);
-
-    $expectedQueryResults = implode('\n', [
-    <<<QUERY
-    UPDATE "users" SET `name` = (CASE \n
-    QUERY,
-    createWhenThens(5),
-    <<<QUERY
-    ELSE `name` END) \n
-    ,`users` SET `email` = (CASE \n
-    QUERY,
-    createWhenThens(5),
-    <<<QUERY
-    ELSE `email` END) \n
-    ,`users` SET `updated_at` = (CASE \n
-    QUERY,
-    createWhenThens(5),
-    <<<QUERY
-    ELSE `updated_at` END) WHERE "id" IN($userIds);
-    QUERY,
-    ]);
-
-    $comparison = str($batchUpdate->getCompiledQuery())->is($expectedQueryResults);
-
-    expect($comparison)->toBeTrue();
+    expect($batchedUpdate->compileUpdateQuery($users)->getCompiledQuery())
+        ->toBe(createCompiledQueryExpectation($users));
 });
 
 
-function createWhenThens(int $count): string
+function createCompiledQueryExpectation(mixed $users): string
 {
-    return Collection::times($count, function () {
-        return <<<MESSAGE
-        WHEN `id` = '*' THEN '*'\n
-        MESSAGE;
-    })->join('\n');
+    $ids = $users->pluck('id')->map(fn ($id) => "'{$id}'")->join(',');
+
+    return implode('', [
+    // NAME
+    <<<QUERY
+    UPDATE "users" SET `name` = (CASE\n
+    QUERY,
+    createWhenThenRegex($users, 'name'),
+
+    // EMAIL
+    <<<QUERY
+    ELSE `name` END)
+    ,`email` = (CASE\n
+    QUERY,
+    createWhenThenRegex($users, 'email'),
+
+    // PASSWORD
+    <<<QUERY
+    ELSE `email` END)
+    ,`password` = (CASE\n
+    QUERY,
+    createWhenThenRegex($users, 'password'),
+
+    // UPDATED_AT
+    <<<QUERY
+    ELSE `password` END)
+    ,`updated_at` = (CASE\n
+    QUERY,
+    createWhenThenRegex($users, 'updated_at'),
+
+    // CREATED_AT
+    <<<QUERY
+    ELSE `updated_at` END)
+    ,`created_at` = (CASE\n
+    QUERY,
+    createWhenThenRegex($users, 'created_at'),
+    <<<QUERY
+    ELSE `created_at` END) WHERE "id" IN({$ids});
+    QUERY,
+    ]);
+}
+
+function createWhenThenRegex(EloquentCollection $models, string $attribute): string
+{
+    return $models
+        ->map(fn (Model $model) => with(
+            $model->toArray(),
+            fn ($asArray) => "WHEN `id` = '{$asArray[$model->getKeyName()]}' THEN '{$asArray[$attribute]}'"
+        ))
+        ->join(PHP_EOL).PHP_EOL;
 }
